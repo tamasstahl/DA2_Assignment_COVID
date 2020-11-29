@@ -113,19 +113,6 @@ ggplot( df , aes(x = confirmed, y = death ))  +
 ##
 # After looking at the plots we could decide that the log-log transformation will be the most accurate, as it is the most linear
 
-####
-# Conclusions:
-#   1) taking log of gdptot is needed, but still non-linear pattern in data/need to use 'approximation' interpretation
-  #     - feasible to check and we do it due to learn how to do it, 
-  #           but in practice I would skip this -> over-complicates analysis
-#   2) using only gdppc is possible, but need to model the non-linearity in data
-#       - Substantive: Level changes is harder to interpret and our aim is not to get $ based comparison
-#       - Statistical: log transformation is way better approximation make simplification!
-#   3) taking log of gdppc is making the association close to linear!
-#   4) taking log for life-expectancy does not matter -> use levels!
-#       - Substantive: it does not give better interpretation
-#       - Statistical: you can compare models with the same y, no better fit
-#       - Remember: simplest the better!
   
 # Take log of death and log of confirmed cases
 df <- df %>% mutate( ln_death = log( death ),
