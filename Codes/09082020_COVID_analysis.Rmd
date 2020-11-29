@@ -1,0 +1,308 @@
+---
+title: "09082020_COVID_analysis"
+author: "Tamas Stahl"
+date: "29/11/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages, include=FALSE}
+library(tidyverse)
+require(scales)
+library(lspline)
+library(estimatr)
+library(texreg)
+library(ggthemes)
+library(car)
+library(ggplot2)
+library(moments)
+library(ggpubr)
+library(xtable)
+
+my_url <- "https://raw.githubusercontent.com/tamasstahl/DA2_Assignment_COVID/master/Data/clean/covid_pop_09_08_2020_clean_final.csv"
+df <- read_csv( my_url )
+```
+
+## Subject of the Analysis
+
+My task was to prepare an analysis on the pattern of association between the number of confirmed cases and deaths of COVID-19 on 8th September, 2020. The data of the COVID related deaths and confirmed cases were collected from a publicly availabe github repo of John Hopkins University, where there is data for any specific date since the start of the pandemic.
+
+The data was processed, cleaned and finalized with the provided codes from the teacher. My additional cleaning step was that the zero values for registered death were not included due to the fact that the log of 0 is -Inf, which could not be interpreted in our case. Some people could also argue that excluding these values might alter the outcome and we should replace those values with a really small number, but I found it more meaningful to exclude them than assign a random low number instead of zero.
+
+An additional note, during the cleaning of the data in order to interpret our numbers more easily, as scaling we used the population divided by a million. So when we are interpreting the results the population will be in million people for population. The number of registered deaths and cases remained intact.
+
+```{r, include=FALSE}
+df %>%
+  keep(is.numeric) %>% 
+  gather() %>% 
+  ggplot(aes(value)) +
+  facet_wrap(~key, scales = "free") +
+  geom_histogram()+
+  theme_wsj() + 
+  scale_fill_wsj()
+
+# Checking the data, found out that there are several observations with 0.
+summary( df )
+
+# Checking the 0 death observations.
+df %>% filter (death == 0)
+
+# Excluding the 0 death observations as when we would like to analyze the log the 0 values will be incomprehensible, as it would result in -Inf. 
+# It could be argued that excluding these observations would change the data, but these observations were small compared to others.  
+df <- df %>% filter(death != 0 )
+
+death_sum_stat <- df %>% summarise(
+  variable = 'Number of registered deaths',
+  mean = mean(death),
+  median = median(death),
+  min = min(death),
+  max = max(death),
+  skew = skewness(death),
+  NumberOfObservations = sum(!is.na(death))
+)
+
+confirmed_sum_stat <- df %>% summarise(
+  variable = 'Number of registered cases',
+  mean = mean(confirmed),
+  median = median(confirmed),
+  min = min(confirmed),
+  max = max(confirmed),
+  skew = skewness(confirmed),
+  NumberOfObservations = sum(!is.na(confirmed))
+)
+
+sum_combined <- death_sum_stat %>% add_row(confirmed_sum_stat)
+xtb <- xtable(sum_combined, type="latex", caption = "Summary statistics")
+```
+
+
+```{r, include = FALSE}
+plot1 <- ggplot(df, aes(x = death))+
+  geom_histogram(aes(y=..density..), alpha = 1, bins = 200)+
+  geom_density(aes(y=..density..), alpha = 0.1, bins = 200)+
+  labs(x='Number of registered deaths', y = 'Density')
+
+plot2 <- ggplot(df, aes(x = confirmed))+
+  geom_histogram(aes(y=..density..), alpha = 1, bins = 500)+
+  geom_density(aes(y=..density..), alpha = 0.1, bins = 500)+
+  labs(x='Number of confirmed cases', y = 'Density')
+```
+
+
+```{r, fig.height = 2, fig.cap = 'Distribution of deaths and confirmed cases of COVID-19', echo = FALSE}
+ggarrange(plot1, plot2, nrow = 1)
+```
+
+
+```{r, echo = FALSE, results="asis", warning=FALSE, message=FALSE}
+print(xtb, comment = FALSE, include.rownames = FALSE)
+```
+
+We could see from either the histograms as well as the summary statistics that these are skewed with a right tail and that both the deaths and confirmed cases are distributed lognormaly, hence we could argue that log-log transformation will be the best option.
+
+# Model chosen
+
+As previously mentioned, I excluded the zero value deaths for the reasons detailed above. Table 1 shows the summary statistics of the confirmed cases and deaths of COVID-19 on 8th September 2020. 
+
+After checking the level-level, log-level, level-log and log-log transformations (please refer to the Appendix) my chosen model would be log-log as in our case the percentage change of number of registered death and registered case would be more informative than the other options. Additionally, taking the log of both variables would make the association more linear as seen in the attached figure.
+
+The substantive reasoning for taking log-log transformation would be that it is easier to interpret than a level-level or log-level transformations as both variables will be in percentage change. In case of log transformation the zero values need to be dealt with as those could not be interpreted. 
+
+The statistical reasoning for taking the log-log interpretation would be that the R2 is comparatively high and captures the variation well. Furthermore, it makes the pattern closer to linear.
+
+After choosing the log-log transformation we will start to make models, I chose weighted OLS as my model (Model 4 of the Appendix), which was: $ln(death) = \alpha + ln(confirmed), weights=population$, as for scaling it would be useful to see the population as well. 
+
+In our case in Model 4, $\alpha=-3.32$ and $\beta=0.98$, where $\alpha$ is hard to interpret. However, $\beta=0.98$ means that if the registered cases are 1 percent higher then the average number of registered deaths is 0.98 percent higher as well.
+
+As my task was to analyze the number of registered cases and deaths of COVID-19 on 8th September 2020, I did not use the per capita value of these. Therefore, I used the population as weight in my chosen model.
+
+# Hypothesis testing
+
+The hypothesis testing was conducted based on whether the estimated $\beta$ parameter is significant at 5%.
+
+$$H_{0}: \beta = 0 ~~and~~ H_{A}: \beta \neq 0 $$
+Below we could see the result of the hypothesis test, that resulted in a a 95% CI of [0.85 1.11]. This means that $H_{0}$ could be rejected with 95% confidence level and that $\beta$ is significant at that level, hence, there is a positive pattern of association between the registered deaths and confirmed cases of COVID-19. From the two-sided hypothesis the p-value is almost 0, which is lower than 0.05, so we could reject $H_{0}$. 
+
+```{r, echo = FALSE, results='asis', warning = FALSE,message=FALSE}
+df <- df %>% mutate( ln_death = log( death ),
+                     ln_confirmed = log( confirmed ) )
+
+reg4 <- lm_robust(ln_death ~ ln_confirmed, data = df , weights = population)
+
+table <- tidy(reg4)
+table <- table %>% 
+  filter(term=='ln_confirmed') %>% 
+  transmute(
+    variable = term,
+    estimate = estimate,
+    std.error = std.error,
+    pvalue = p.value,
+    conf.low = conf.low,
+    conf.high = conf.high)
+
+xtb <- xtable(table, type="latex", caption = "Hypothesis test")
+```
+
+```{r, echo = FALSE, results="asis", warning=FALSE, message=FALSE}
+print(xtb, comment = FALSE, include.rownames = FALSE)
+```
+
+# Analysis of residuals
+
+Table 3 shows the 5 best performing countries, where less people died than projected. In order to find out what might have been the reasons for this "over-achievement", people must be informed regarding those countries. In our list of 5 there are really wealthy countries like Singapore, Qatar, etc. where the health care system might be more developed and more people could be saved. Another reason could also be that the data is not entirely correct, there are regions where not all the COVID-19 related deaths are reported, therefore, there might be missing values. 
+
+```{r, fig.width = 10, echo = FALSE, results='asis', warning = FALSE,message=FALSE}
+
+# Get the predicted y values from the model
+df$reg4_y_pred <- reg4$fitted.values
+# Calculate the errors of the model
+df$reg4_res <- df$ln_death - df$reg4_y_pred 
+
+# Find countries with largest negative errors
+best <- df %>% top_n( -5 , reg4_res ) %>% 
+      select( country , ln_death , reg4_y_pred , reg4_res )
+
+best5 <- xtable(best, type = "latex", caption = "The 5 best best performing countries")
+print(best5, comment = FALSE, include.rownames = FALSE)
+
+```
+
+\newpage
+Table 4 shows the 5 worst performing countries with the largest positive errors, including Belgium, Italy, Mexico, UK. Keep in mind that these numbers are weighted with the population. The reason behind the "poor performance" of these countries might be that COVID-19 infected people in these regions first. Therefore, there was no best practice, doctors and people did not know how to treat this virus. Another reason for this performance could be that the health care system is not that developed or even overcrowded, like in Italy and Spain during the spring.
+
+```{r,fig.width = 10, echo = FALSE, results='asis', warning = FALSE,message=FALSE}
+
+# Get the predicted y values from the model
+df$reg4_y_pred <- reg4$fitted.values
+# Calculate the errors of the model
+df$reg4_res <- df$ln_death - df$reg4_y_pred 
+
+# Find countries with largest positive errors
+worst <- df %>% top_n( 5 , reg4_res ) %>% 
+       select( country , ln_death , reg4_y_pred , reg4_res )
+
+worst5 <- xtable(worst, type = "latex", caption = "The 5 worst best performing countries")
+print(worst5, comment = FALSE, include.rownames = FALSE)
+
+```
+
+# Executive summary
+
+In this assignment my task was to analyze the pattern of association between the number of confirmed cases and registered deaths of COVID-19 on the 8th of September 2020. In order to analyze the data I used weighted regression, where the weights were the population of each country in million people. During my analysis I calculated that there is a positive pattern of association between the number of registered deaths and confirmed cases of COVID-19. 
+
+The quality of the data is questionable as all these data are collected from the authorities of each country, and as I mentioned earlier, some countries my report more cases or deaths than there actually is or even less cases or deaths. The model could be strengthened by more variables like the location (urban or rural areas), age of infected, numbers of days required to recover and whether there were symptoms.
+
+To summarize my findings in Model 4 (weighted-OLS), we could say that if the confirmed cases are 1 percent higher than the average number of registered deaths is 0.98 percent higher.
+
+\newpage
+# Appendix
+
+```{r, fig.cap='Scatter plot for the level and log transformations', echo = FALSE, results="asis", warning=FALSE, message=FALSE}
+# 1) confirmed-death: level-level model without scaling
+## level-level
+plot1 <- ggplot( df , aes(x = confirmed, y = death)) +
+  geom_point() +
+  geom_smooth(method="loess")+
+  labs(x = "# of registered cases",y = "# of registered deaths") 
+
+# 2) You can change the scale for confirmed cases for checking log-transformation
+## log-level
+plot2 <- ggplot( df , aes(x = confirmed, y = death)) +
+  geom_point() +
+  geom_smooth(method="loess")+
+  labs(x = "# of registered cases (ln scale)",y = "# of registered deaths") +
+  scale_x_continuous( trans = log_trans(),  breaks = c(1,20,500,3000,10000) )
+
+# 3) You can change the scale for registered cases for checking log-transformation
+## level-log
+plot3 <- ggplot( df , aes(x = confirmed, y = death)) +
+  geom_point() +
+  geom_smooth(method="loess")+
+  labs(x = "# of registered cases",y = "# of registered deaths (ln scale)") +
+  scale_y_continuous( trans = log_trans(),  breaks = c(1,20,500,3000,10000) )
+
+# 4) You can change the scale for confirmed cases and registered deaths for checking log-transformation
+## log-log
+plot4 <- ggplot( df , aes(x = confirmed, y = death ))  +
+  geom_point() +
+  geom_smooth(method="loess")+
+  labs(x = "# of registered cases (ln scale)",y = "# of registered deaths (ln scale)") +
+  scale_x_continuous( trans = log_trans(),  breaks = c(1,20,500,3000,10000) )+
+  scale_y_continuous( trans = log_trans(), breaks = c(1,20, 50, 200) )
+
+ggarrange(plot1, plot2, plot3, plot4,
+          nrow = 2, ncol = 2)
+```
+
+# Models description
+
+Below you could find scatter plots for each model (1 through 4) and a summary table of each model with intercept, beta, R2, etc. Our 4 models were the following: Model 1: Simple linear regression, Model 2: Quadratic, Model 3: PLS, Model 4: Weighted OLS.
+
+We could say that all the models capture the positive pattern of association between the variables, although I chose Model 4 as the R2 was the highest with 0.92 and the population weight is important to give depth for our analysis as we used only the number of registered deaths and confirmed cases. From a statistical point of view this model is also beneficial as the standard error and CI is smaller, resulting in more precise prediction.
+
+```{r, include=FALSE}
+df <- df %>% mutate( ln_confirmed_sq = ln_confirmed^2,
+                     ln_confirmed_cb = ln_confirmed^3)
+
+# Linear model:
+reg1 <- lm_robust( ln_death ~ ln_confirmed , data = df , se_type = "HC2" )
+summary( reg1 )
+plot_reg1 <- ggplot( data = df, aes( x = ln_confirmed, y = ln_death ) ) + 
+  geom_point( color='blue') +
+  geom_smooth( method = lm , color = 'red' )
+
+
+
+# Quadratic
+reg2 <- lm_robust( ln_death ~ ln_confirmed + ln_confirmed_sq , data = df )
+summary( reg2 )
+plot_reg2 <- ggplot( data = df, aes( x = ln_confirmed, y = ln_death ) ) + 
+  geom_point( color='blue') +
+  geom_smooth( formula = y ~ poly(x,2) , method = lm , color = 'red' )
+
+
+
+# PLS:
+# 1st define the cutoff for confirmed cases
+cutoff <- c(100,1000)
+# 2nd we use a log transformation -> cutoff needs to be transformed as well
+cutoff_ln<- log( cutoff )
+# Use simple regression with the lspline function
+reg3 <- lm_robust(ln_death ~ lspline( ln_confirmed , cutoff_ln ), data = df )
+summary( reg3 )
+plot_reg3 <- ggplot( data = df, aes( x = ln_confirmed, y = ln_death ) ) + 
+  geom_point( color='blue') +
+  geom_smooth( formula = y ~ lspline(x,cutoff_ln) , method = lm , color = 'red' )
+
+
+
+# Weighted-OLS: use reg4 setup and weight with population
+reg4 <- lm_robust(ln_death ~ ln_confirmed, data = df , weights = population)
+summary( reg4 )
+plot_reg4 <- ggplot(data = df, aes(x = ln_confirmed, y = ln_death)) +
+  geom_point(data = df, aes(size=population),  color = 'blue', shape = 16, alpha = 0.8,  show.legend=F) +
+  geom_smooth(aes(weight = population), method = "lm", color='red')+
+  scale_size(range = c(0, 4)) +
+  coord_cartesian(ylim = c(0, 12)) +
+  labs(x = "ln(confirmed cases) ",y = "ln(registered death)")
+```
+
+
+
+```{r, results='asis', echo=FALSE}
+library(texreg)
+texreg(list(reg1, reg2, reg3, reg4), table = F, use.packages = F)
+```
+
+
+
+```{r, fig.cap='Scatter plots for visualization of models', results='asis', echo=FALSE}
+ggarrange(plot_reg1, plot_reg2, plot_reg3, plot_reg4,
+          labels = c("Model 1", "Model 2", "Model 3", "Model 4"),
+          label.x = 0.2,
+          label.y = 1,
+          ncol = 2, nrow = 2)
+```
